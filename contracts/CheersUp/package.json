@@ -1,5 +1,5 @@
 {
-    "name": "cherrsup",
+    "name": "cheersup",
     "devDependencies": {
         "@nomiclabs/hardhat-ethers": "^2.0.5",
         "erc721a": "3.2.0",
