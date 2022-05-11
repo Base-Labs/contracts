@@ -1,0 +1,13 @@
+{
+    "name": "cherrsup",
+    "devDependencies": {
+        "@nomiclabs/hardhat-ethers": "^2.0.5",
+        "erc721a": "3.2.0",
+        "ethers": "^5.6.2"
+    },
+    "dependencies": {
+        "@nomiclabs/hardhat-waffle": "^2.0.3",
+        "@openzeppelin/contracts": "4.5.0",
+        "hardhat": "^2.9.3"
+    }
+}
