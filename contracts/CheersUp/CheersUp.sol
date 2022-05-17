@@ -100,7 +100,7 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
         uint256 price;
         address beneficiary;
     }
-    uint256 public constant MAX_TOKEN = 10000;
+    uint256 public constant MAX_TOKEN = 5000;
 
     string public provenance;
     string public revealingURI;
@@ -140,6 +140,7 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
     function mint(address address_, uint256 cucpTokenId_) public returns(uint256) {
         require(_msgSender() == cucpContractAddress, "not authorized");
         require(_numberMinted + 1 <= MAX_TOKEN, "mint would exceed max supply");
+        require(cucpTokenId_ < MAX_TOKEN, "cucpTokenId is invalid");
         uint256 tokenId = getRandomTokenId();
         _safeMint(address_, tokenId);
         unchecked {
