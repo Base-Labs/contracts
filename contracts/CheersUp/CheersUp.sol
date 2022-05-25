@@ -108,7 +108,7 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
     bool public contractSealed;
     RefundConfig public refundConfig;
 
-    uint[MAX_TOKEN] internal randIndices;
+    uint256[MAX_TOKEN] internal _randIndices;
     uint256 private _numberMinted;
     mapping(uint256 => bytes32) private _tokenHashes;
 
@@ -117,7 +117,7 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
         address cucpContractAddress_,
         address maintainerAddress_,
         string memory provenance_
-    ) ERC721("Cheers UP", "CHEERSUP") {
+    ) ERC721("Cheers UP", "CUP") {
         revealingURI = revealingURI_;
         cucpContractAddress = cucpContractAddress_;
         maintainerAddress = maintainerAddress_;
@@ -157,8 +157,8 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
         unchecked {
             uint256 remain = MAX_TOKEN - _numberMinted;
             uint256 pos = unsafeRandom() % remain;
-            uint256 val = randIndices[pos] == 0 ? pos : randIndices[pos];
-            randIndices[pos] = randIndices[remain - 1] == 0 ? remain - 1 : randIndices[remain - 1];
+            uint256 val = _randIndices[pos] == 0 ? pos : _randIndices[pos];
+            _randIndices[pos] = _randIndices[remain - 1] == 0 ? remain - 1 : _randIndices[remain - 1];
             return val;
         }
     }
@@ -197,6 +197,16 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
     }
 
     /**
+     * @notice issuer have permission to burn token.
+     * @param tokenIds_ list of tokenId
+     */
+    function burn(uint256[] calldata tokenIds_) external onlyOwner nonReentrant  {
+        for (uint256 i = 0; i < tokenIds_.length; i++) {
+            _burn(tokenIds_[i]);
+        }
+    }
+
+    /**
      * @notice issuer have permission to deposit ETH into the contract, which is used to support the refund logic.
      */
     function deposit() external payable onlyOwner nonReentrant {
@@ -212,6 +222,112 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
         emit Withdraw(_msgSender(), balance);
     }
 
+
+    /***********************************|
+    |             Brewing               |
+    |__________________________________*/
+
+    event BrewingStarted(uint256 indexed tokenId, address indexed account);
+    event BrewingStopped(uint256 indexed tokenId, address indexed account);
+    event BrewingInterrupted(uint256 indexed tokenId);
+    event BrewingTokenTransfered(address indexed from, address indexed to, uint256 indexed tokenId);
+    event BrewingAllowedFlagChanged(bool isBrewingAllowed);
+    struct BrewingStatus {
+        uint256 lastStartTime;
+        uint256 total;
+    }
+    bool public isBrewingAllowed;
+    bool private _isBrewingTransferLocked = true;
+    mapping(uint256 => BrewingStatus) private _brewingStatuses;
+
+    /**
+     * @notice safeTransferWhileBrewing is used to safely transfer tokens without changing the brewing state.
+     * @param from_ cannot be the zero address.
+     * @param to_ cannot be the zero address.
+     * @param tokenId_ token must exist and be owned by `from`.
+     */
+    function safeTransferWhileBrewing(address from_, address to_, uint256 tokenId_) external nonReentrant {
+        require(ownerOf(tokenId_) == msg.sender, "caller is not owner");
+        _isBrewingTransferLocked = false;
+        safeTransferFrom(from_, to_, tokenId_);
+        _isBrewingTransferLocked = true;
+        if (_brewingStatuses[tokenId_].lastStartTime != 0) {
+            emit BrewingTokenTransfered(from_, to_, tokenId_);
+        }
+    }
+
+    /**
+     * @notice setIsBrewingAllowed is used to set the global switch to control whether users are allowed to brew.
+     * @param isBrewingAllowed_ set to true to allow
+     */
+    function setIsBrewingAllowed(bool isBrewingAllowed_) external onlyOwner {
+        isBrewingAllowed = isBrewingAllowed_;
+        emit BrewingAllowedFlagChanged(isBrewingAllowed);
+    }
+
+    /**
+     * @notice getTokenBrewingStatus is used to get the detailed brewing status of a specific token.
+     * @param tokenId_ token id
+     * @return isBrewing_ whether the current token is brewing.
+     * @return current_ how long the token has been brewing in the hands of the current hodler.
+     * @return total_ total amount of brewing since the token minted.
+     */
+    function getTokenBrewingStatus(uint256 tokenId_) external view returns (bool isBrewing_, uint256 current_, uint256 total_) {
+        require(_exists(tokenId_), "query for nonexistent token");
+        BrewingStatus memory status = _brewingStatuses[tokenId_];
+        if (status.lastStartTime != 0) {
+            isBrewing_ = true;
+            current_ = block.timestamp - status.lastStartTime;
+        }
+        total_ = status.total + current_;
+    }
+
+    /**
+     * @notice setTokenBrewingState is used to modify the Brewing state of the Token,
+     * only the Owner of the Token has this permission.
+     * @param tokenIds_ list of tokenId
+     * @param state_ If true, brew will be started. If false, brew will be stopped.
+     */
+    function setTokenBrewingState(uint256[] calldata tokenIds_, bool state_) external nonReentrant {
+        unchecked {
+            for (uint256 i = 0; i < tokenIds_.length; i++) {
+                uint256 tokenId = tokenIds_[i];
+                require(_isApprovedOrOwner(msg.sender, tokenId), "caller is not approved or owner");
+                BrewingStatus storage status = _brewingStatuses[tokenId];
+                uint256 lastStartTime = status.lastStartTime;
+                if (state_ && lastStartTime == 0) {
+                    require(isBrewingAllowed, "brewing is not allowed");
+                    status.lastStartTime = block.timestamp;
+                    emit BrewingStarted(tokenId, msg.sender);
+                } else if (!state_ && lastStartTime > 0) {
+                    status.total += block.timestamp - lastStartTime;
+                    status.lastStartTime = 0;
+                    emit BrewingStopped(tokenId, msg.sender);
+                }
+            }
+        }
+    }
+
+    /**
+     * @notice interruptTokenBrewing gives the issuer the right to forcibly interrupt the brewing state of the token.
+     * One scenario of using it is: someone may maliciously place low-priced brewing tokens on
+     * the secondary market (because brewing tokens cannot be traded).
+     * @param tokenIds_ the tokenId list to operate
+     */
+    function interruptTokenBrewing(uint256[] calldata tokenIds_) external atLeastMaintainer {
+        for (uint256 i = 0; i < tokenIds_.length; i++) {
+            uint256 tokenId = tokenIds_[i];
+            require(_exists(tokenId), "operate for nonexistent token");
+            BrewingStatus storage status = _brewingStatuses[tokenId];
+            require(status.lastStartTime != 0, "brewing is not started");
+            unchecked {
+                status.total += block.timestamp - status.lastStartTime;
+                status.lastStartTime = 0;
+            }
+            emit BrewingStopped(tokenId, msg.sender);
+            emit BrewingInterrupted(tokenId);
+        }
+    }
 
 
     /***********************************|
@@ -327,7 +443,7 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
 
 
     /***********************************|
-    |              Pause                |
+    |          Pause & Hooks            |
     |__________________________________*/
 
     /**
@@ -338,8 +454,11 @@ contract CheersUp is ERC721, Pausable, Ownable, ReentrancyGuard, Crypto {
         address to,
         uint256 tokenId
     ) internal virtual override {
-        super._beforeTokenTransfer(from, to, tokenId);
         require(!paused(), "token transfer paused");
+        if (_isBrewingTransferLocked) {
+            require(_brewingStatuses[tokenId].lastStartTime == 0, "token is brewing");
+        }
+        super._beforeTokenTransfer(from, to, tokenId);
     }
 
     /**
